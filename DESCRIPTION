@@ -25,3 +25,5 @@ Suggests:
     later,
     testthat,
     roxygen2
+URL: https://github.com/knowusuboaky/chatLLM
+BugReports: https://github.com/knowusuboaky/chatLLM/issues
