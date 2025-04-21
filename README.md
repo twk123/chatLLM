@@ -174,12 +174,6 @@ call_llm(
 
 ---
 
-## Contributing
-
-Contributions are welcome! Please review the [CONTRIBUTING](CONTRIBUTING.md) file for guidelines on how to get started.
-
----
-
 ## Issues
 
 If you encounter any issues or have suggestions, please open an issue on [GitHub Issues](https://github.com/knowusuboaky/chatLLM/issues).
