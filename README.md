@@ -1,19 +1,19 @@
 
 <!-- README.md is generated from README.Rmd. Please edit that file -->
 
-# chatLLM <a href="https://cran.r-project.org/package=chatLLM"><img src="man/figures/chatlogo.png" align="right" height="120" /></a>
+# chatLLM <a href="https://knowusuboaky.github.io/chatLLM"><img src="man/figures/chatlogo.png" align="right" height="120" /></a>
 
 <!-- badges: start -->
 
 [![CRAN
 status](https://www.r-pkg.org/badges/version/chatLLM)](https://cran.r-project.org/package=chatLLM)
-[![Total
-Downloads](https://cranlogs.r-pkg.org/badges/grand-total/chatLLM?color=orange)](https://cranlogs.r-pkg.org/badges/grand-total/chatLLM)
 [![Codecov test
 coverage](https://codecov.io/gh/knowusuboaky/chatLLM/branch/main/graph/badge.svg)](https://app.codecov.io/gh/knowusuboaky/chatLLM?branch=main)
 [![Last
 Commit](https://img.shields.io/github/last-commit/knowusuboaky/chatLLM.svg)](https://github.com/knowusuboaky/chatLLM/commits/main)
 [![Issues](https://img.shields.io/github/issues/knowusuboaky/chatLLM.svg)](https://github.com/knowusuboaky/chatLLM/issues)
+[![Total
+Downloads](https://cranlogs.r-pkg.org/badges/grand-total/chatLLM?color=orange)](https://cranlogs.r-pkg.org/badges/grand-total/chatLLM)
 <!-- badges: end -->
 
 ## Overview
