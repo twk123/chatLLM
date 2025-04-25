@@ -1,7 +1,7 @@
 
 <!-- README.md is generated from README.Rmd. Please edit that file -->
 
-# chatLLM <a href="https://knowusuboaky.github.io/chatLLM"><img src="man/figures/chatlogo.png" align="right" height="120" /></a>
+# chatLLM <a href="https://knowusuboaky.github.io/chatLLM"><img src="man/figures/openlogo.png" align="right" height="120" /></a>
 
 <!-- badges: start -->
 
