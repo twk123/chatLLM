@@ -1,6 +1,6 @@
 Package: chatLLM
 Type: Package
-Title: ChatLLM: A Flexible Interface for 'LLM' API Interactions
+Title: A Flexible Interface for 'LLM' API Interactions
 Version: 0.1.1
 Authors@R: person(given = "Kwadwo Daddy Nyame",
                   family = "Owusu Boakye",

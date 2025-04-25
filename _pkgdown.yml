@@ -1,0 +1,7 @@
+url: ~
+template:
+  bootstrap: 5
+  logo: man/figures/openlogo.png
+
+favicon: man/figures/favicon-32.ico
+
