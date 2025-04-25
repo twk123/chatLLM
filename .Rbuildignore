@@ -1,0 +1,12 @@
+^.*\.Rproj$
+^\.Rproj\.user$
+^LICENSE\.md$
+^\.Rproj$
+^\.git$
+^\.github$
+^\.Rhistory$
+^\.RData$
+^CONTRIBUTING\.md$
+^_pkgdown\.yml$
+^docs$
+^pkgdown$
