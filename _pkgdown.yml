@@ -1,6 +1,4 @@
 url: https://knowusuboaky.github.io/chatLLM/
 template:
   bootstrap: 5
-  logo: man/figures/logo.png
 
-favicon: man/figures/favicon.ico
