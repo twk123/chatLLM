@@ -3,4 +3,4 @@
 ## New Features
 
 - **DeepSeek Integration**  
-  Added support for the [DeepSeek](https://deepseek.com/) language model. You can now use DeepSeek as an LLM backend via `chatLLM::use_deepseek()`. This brings greater flexibility and expanded model support to the `chatLLM` ecosystem.
+  DeepSeek has been added as a supported provider in the `chat_llm()` function. This integration expands the range of available language models and enhances flexibility for users selecting different backends.
