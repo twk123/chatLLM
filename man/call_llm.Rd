@@ -2,81 +2,185 @@
 % Please edit documentation in R/chatLLM.R
 \name{call_llm}
 \alias{call_llm}
-\title{Call a Large Language Model with optional retries & extra parameters}
-\usage{
-call_llm(
-  prompt = NULL,
-  messages = NULL,
-  provider = c("openai", "groq", "anthropic"),
-  model = NULL,
-  temperature = 0.7,
-  max_tokens = 1000,
-  api_key = NULL,
-  n_tries = 3,
-  backoff = 2,
-  endpoint_url = NULL,
-  ...,
-  .post_func = httr::POST
-)
-}
+\title{Unified chat - completion interface}
 \arguments{
-\item{prompt}{(character) A single user prompt. If `messages` provided, prompt
-is appended as a user message (optional).}
+\item{prompt}{Character. Single user prompt (optional if `messages`).}
 
-\item{messages}{(list) A list of message objects, each a list(role, content).}
+\item{messages}{List. Full chat history; see *Messages*.}
 
-\item{provider}{(character) One of "openai", "groq", or "anthropic".}
+\item{provider}{Character. One of `"openai"`, `"groq"`, `"anthropic"`,
+`"deepseek"`, `"dashscope"`, or `"github"`.}
 
-\item{model}{(character) The model name. Defaults to a known model per provider.}
+\item{model}{Character. Model ID. If `NULL`, uses the provider default.}
 
-\item{temperature}{(numeric) Sampling temperature (0 to ~2).}
+\item{temperature}{Numeric. Sampling temperature (0 - 2). Default `0.7`.}
 
-\item{max_tokens}{(integer) Maximum number of tokens to generate.}
+\item{max_tokens}{Integer. Max tokens to generate. Default `1000`.}
 
-\item{api_key}{(character) An API key. If NULL, uses the environment variable.}
+\item{api_key}{Character. Override API key; if `NULL`, uses the
+environment variable for that provider.}
 
-\item{n_tries}{(integer) Number of attempts for retry on failure.}
+\item{n_tries}{Integer. Retry attempts on failure. Default `3`.}
 
-\item{backoff}{(numeric) Seconds to wait between retries.}
+\item{backoff}{Numeric. Seconds between retries. Default `2`.}
 
-\item{endpoint_url}{(character) Base URL for the provider. If NULL,
-uses a default for the given provider.}
+\item{verbose}{Logical. Whether to display informational messages
+(`TRUE`) or suppress them (`FALSE`). Default `TRUE`.}
 
-\item{...}{Additional parameters appended to the request body.}
+\item{endpoint_url}{Character. Custom endpoint; if `NULL`, a sensible
+provider - specific default is used.}
 
-\item{.post_func}{(function) (Internal) Function to perform POST requests.
-Defaults to \code{httr::POST}.}
+\item{github_api_version}{Character. Header `X - GitHub - Api - Version`.
+Default `"2022 - 11 - 28"`.}
+
+\item{anthropic_api_version}{Character. Header `anthropic - version`.
+Default `"2023 - 06 - 01"`.}
+
+\item{...}{Extra JSON - body fields (e.g. `top_p`, `stop`,
+`presence_penalty`).}
+
+\item{.post_func}{Internal. HTTP POST function (default `httr::POST`).}
 }
 \value{
-(character) The text completion from the chosen model.
+Character scalar: assistant reply text.
 }
 \description{
-Call a Large Language Model with optional retries & extra parameters
+A unified wrapper for several "OpenAI - compatible" chat - completion APIs
+(OpenAI, Groq, Anthropic, DeepSeek, Alibaba DashScope, GitHub Models).
+Accepts either a single `prompt` **or** a full `messages` list, adds the
+correct authentication headers, retries on transient failures, and returns
+the assistant's text response. You can toggle informational console
+output with `verbose = TRUE/FALSE`. If the chosen `model` is no longer
+available, the function stops early and suggests running
+`list_models("<provider>")`.
 }
+\details{
+Core chat - completion wrapper for multiple providers
+}
+\section{Messages}{
+
+* `prompt`    -  character scalar treated as a single *user* message.
+* `messages`  -  list of lists; each element must contain `role` and `content`.
+               If both arguments are supplied, the `prompt` is appended
+               as an extra user message.
+}
+
 \examples{
 \dontrun{
-response <- call_llm(
-  prompt = "Hello, how are you?",
-  provider = "openai",
-  max_tokens = 50,
-  n_tries = 3,
-  backoff = 2
-)
-cat(response)
 
-conv <- list(
-  list(role = "system", content = "You are a helpful assistant."),
-  list(role = "user",   content = "Explain recursion in R.")
+## 1. Listing available models
+# List all providers at once
+all_mods <- list_models("all")
+str(all_mods)
+
+# List OpenAI-only, Groq-only, Anthropic-only
+openai_mods   <- list_models("openai")
+groq_mods     <- list_models("groq")
+anthropic_mods<- list_models("anthropic", anthropic_api_version = "2023-06-01")
+
+## 2. Single-prompt interface
+
+# 2a. Basic usage
+Sys.setenv(OPENAI_API_KEY = "sk-...")
+res_basic <- call_llm(
+  prompt   = "Hello, how are you?",
+  provider = "openai"
 )
-response <- call_llm(
-  messages = conv,
+cat(res_basic)
+
+# 2b. Adjust sampling and penalties
+res_sampling <- call_llm(
+  prompt      = "Write a haiku about winter",
+  provider    = "openai",
+  temperature = 1.2,
+  top_p       = 0.5,
+  presence_penalty  = 0.6,
+  frequency_penalty = 0.4
+)
+cat(res_sampling)
+
+# 2c. Control length and retries
+res_len <- call_llm(
+  prompt      = "List 5 uses for R",
+  provider    = "openai",
+  max_tokens  = 50,
+  n_tries     = 5,
+  backoff     = 0.5
+)
+cat(res_len)
+
+# 2d. Using stop sequences
+res_stop <- call_llm(
+  prompt   = "Count from 1 to 10:",
   provider = "openai",
-  max_tokens = 200,
-  presence_penalty = 0.2,
-  frequency_penalty = 0.1,
-  top_p = 0.95,
-  stop = c("###")
+  stop     = c("6")
 )
-cat(response)
+cat(res_stop)
+
+# 2e. Override API key for one call
+res_override <- call_llm(
+  prompt   = "Override test",
+  provider = "openai",
+  api_key  = "sk-override",
+  max_tokens = 20
+)
+cat(res_override)
+
+# 2f. Factory interface for repeated prompts
+GitHubLLM <- call_llm(
+  provider   = "github",
+  max_tokens = 60,
+  verbose    = FALSE
+)
+# direct invocation
+story1 <- GitHubLLM("Tell me a short story")
+cat(story1)
+
+## 3. Multi-message conversation
+
+# 3a. Simple system + user
+convo1 <- list(
+  list(role = "system",    content = "You are a helpful assistant."),
+  list(role = "user",      content = "Explain recursion.")
+)
+res1 <- call_llm(
+  messages   = convo1,
+  provider   = "openai",
+  max_tokens = 100
+)
+cat(res1)
+
+# 3b. Continue an existing chat by appending a prompt
+prev <- list(
+  list(role = "system", content = "You are concise."),
+  list(role = "user",   content = "Summarize the plot of Hamlet.")
+)
+res2 <- call_llm(
+  messages = prev,
+  prompt   = "Now give me three bullet points."
+)
+cat(res2)
+
+# 3c. Use stop sequence in multi-message
+convo2 <- list(
+  list(role = "system", content = "You list items."),
+  list(role = "user",   content = "Name three colors.")
+)
+res3 <- call_llm(
+  messages = convo2,
+  stop     = c(".")
+)
+cat(res3)
+
+# 3d. Multi-message via factory interface
+ScopedLLM <- call_llm(provider = "openai", temperature = 0.3)
+chat_ctx <- list(
+  list(role = "system", content = "You are a math tutor.")
+)
+ans1 <- ScopedLLM(messages = chat_ctx, prompt = "Solve 2+2.")
+cat(ans1)
+ans2 <- ScopedLLM("What about 10*10?")
+cat(ans2)
 }
+
 }

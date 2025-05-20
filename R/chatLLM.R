@@ -1,190 +1,492 @@
-# chatLLM.R
-# ------------------------------------------------------------------------------
-# A flexible LLM calling utility that supports multiple providers:
-#   - OpenAI (e.g., GPT-3.5-turbo, GPT-4)
-#   - Groq (e.g., mixtral-8x7b-32768)
-#   - Anthropic (e.g., Claude 3)
-#
-# API Keys must be set in the environment:
-#   - Sys.setenv(OPENAI_API_KEY    = "your_openai_key")
-#   - Sys.setenv(GROQ_API_KEY      = "your_groq_key")
-#   - Sys.setenv(ANTHROPIC_API_KEY = "your_anthropic_key")
+###############################################################################
+# chatLLM helpers + call_llm()                                                #
+# Requires: httr (>= 1.4.6), jsonlite                                         #
+###############################################################################
 # ------------------------------------------------------------------------------
 #' @importFrom httr POST add_headers http_error content
 #' @importFrom jsonlite toJSON fromJSON
+#' @importFrom httr GET timeout status_code
+#' @importFrom stats setNames
+
 library(httr)
 library(jsonlite)
 
-# ------------------------------------------------------------------------------
-# Helper: return default model names
-# ------------------------------------------------------------------------------
+###############################################################################
+# 1. Provider defaults                                                        #
+###############################################################################
 get_default_model <- function(provider) {
   switch(
-    provider,
+    tolower(provider),
     "openai"    = "gpt-3.5-turbo",
-    "groq"      = "mixtral-8x7b-32768",
-    "anthropic" = "claude-3-opus-20240229",
+    "groq"      = "meta-llama/llama-4-scout-17b-16e-instruct",
+    "anthropic" = "claude-3-7-sonnet-20250219",
+    "deepseek"  = "deepseek-chat",
+    "dashscope" = "qwen-plus-latest",
+    "github"    = "openai/gpt-4.1",
     stop("No default model for provider: ", provider)
   )
 }
 
-# ------------------------------------------------------------------------------
-# Helper: fetch the API key from environment or user input
-# ------------------------------------------------------------------------------
+###############################################################################
+# 2. API-key helper                                                           #
+###############################################################################
 get_api_key <- function(provider, api_key = NULL) {
   env_var <- switch(
-    provider,
+    tolower(provider),
     "openai"    = "OPENAI_API_KEY",
     "groq"      = "GROQ_API_KEY",
     "anthropic" = "ANTHROPIC_API_KEY",
-    stop("No environment variable defined for provider: ", provider)
+    "deepseek"  = "DEEPSEEK_API_KEY",
+    "dashscope" = "DASHSCOPE_API_KEY",
+    "github"    = "GH_MODELS_TOKEN",
+    stop("Unknown provider: ", provider)
   )
-  if (is.null(api_key)) {
-    api_key <- Sys.getenv(env_var)
-  }
-  if (!nzchar(api_key)) {
-    stop(sprintf("API key not found. Please set %s or provide `api_key`.", env_var))
-  }
+  if (is.null(api_key)) api_key <- Sys.getenv(env_var)
+  if (!nzchar(api_key))
+    stop(sprintf("API key not found for %s.  Set %s or pass `api_key`.",
+                 provider, env_var))
   api_key
 }
 
-# ------------------------------------------------------------------------------
-# Helper: parse the text from different provider responses
-# ------------------------------------------------------------------------------
-parse_response <- function(provider, content) {
+###############################################################################
+# 3. Parse chat-completion responses                                          #
+###############################################################################
+parse_response <- function(provider, parsed) {
   switch(
-    provider,
-    "openai"    = content$choices[[1]]$message$content,
-    "groq"      = content$choices[[1]]$message$content,
-    "anthropic" = content$content[[1]]$text,
+    tolower(provider),
+    "openai"    = parsed$choices[[1]]$message$content,
+    "groq"      = parsed$choices[[1]]$message$content,
+    "anthropic" = parsed$content[[1]]$text,
+    "deepseek"  = parsed$choices[[1]]$message$content,
+    "dashscope" = parsed$choices[[1]]$message$content,
+    "github"    = parsed$choices[[1]]$message$content,
     stop("Parsing not implemented for provider: ", provider)
   )
 }
 
-# ------------------------------------------------------------------------------
-# Main function: call_llm()
-# ------------------------------------------------------------------------------
-#' Call a Large Language Model with optional retries & extra parameters
+###############################################################################
+# 4. Model-catalog helpers (one per provider)                                 #
+###############################################################################
+get_openai_models <- function(token = Sys.getenv("OPENAI_API_KEY")) {
+  if (!nzchar(token)) return(character())
+  r <- GET("https://api.openai.com/v1/models",
+           add_headers(Authorization = paste("Bearer", token)),
+           timeout(60))
+  if (http_error(r)) return(character())
+  vapply(content(r, "parsed")$data, `[[`, character(1), "id")
+}
+
+get_groq_models <- function(token = Sys.getenv("GROQ_API_KEY")) {
+  if (!nzchar(token)) return(character())
+  r <- GET("https://api.groq.com/openai/v1/models",
+           add_headers(Authorization = paste("Bearer", token)),
+           timeout(60))
+  if (http_error(r)) return(character())
+  vapply(content(r, "parsed")$data, `[[`, character(1), "id")
+}
+
+get_anthropic_models <- function(token = Sys.getenv("ANTHROPIC_API_KEY"),
+                                 anthropic_api_version = "2023-06-01",
+                                 limit = 1000) {
+  if (!nzchar(token)) return(character())
+  r <- tryCatch(
+    GET("https://api.anthropic.com/v1/models",
+        add_headers(`x-api-key` = token,
+                    `anthropic-version` = anthropic_api_version),
+        query = list(limit = limit),
+        timeout(60)),
+    error = function(e) NULL)
+  if (is.null(r) || http_error(r)) return(character())
+  p <- content(r, "parsed")
+  if (!is.null(p$data))
+    return(vapply(p$data, `[[`, character(1), "id"))
+  if (!is.null(p$models))
+    return(vapply(p$models, `[[`, character(1), "name"))
+  character()
+}
+
+get_deepseek_models <- function(token = Sys.getenv("DEEPSEEK_API_KEY")) {
+  if (!nzchar(token)) return(character())
+  r <- GET("https://api.deepseek.com/v1/models",
+           add_headers(Authorization = paste("Bearer", token)),
+           timeout(60))
+  if (http_error(r)) return(character())
+  vapply(content(r, "parsed")$data, `[[`, character(1), "id")
+}
+
+get_dashscope_models <- function(token = Sys.getenv("DASHSCOPE_API_KEY")) {
+  if (!nzchar(token)) return(character())
+  r <- GET("https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models",
+           add_headers(Authorization = paste("Bearer", token)),
+           timeout(60))
+  if (http_error(r)) return(character())
+  vapply(content(r, "parsed")$data, `[[`, character(1), "id")
+}
+
+get_all_github_models <- function(token       = Sys.getenv("GH_MODELS_TOKEN"),
+                                  api_version = "2022-11-28") {
+  if (!nzchar(token)) return(character())
+  r <- GET("https://models.github.ai/catalog/models",
+           add_headers(Accept = "application/vnd.github+json",
+                       Authorization = paste("Bearer", token),
+                       `X-GitHub-Api-Version` = api_version),
+           timeout(60))
+  if (http_error(r)) return(character())
+  vapply(content(r, "parsed", simplifyVector = FALSE),
+         `[[`, character(1), "id")
+}
+
+###############################################################################
+# 5. list_models()                                                            #
+###############################################################################
+#' List Available Models for Supported Providers
 #'
-#' @param prompt (character) A single user prompt. If `messages` provided, prompt
-#'   is appended as a user message (optional).
-#' @param messages (list) A list of message objects, each a list(role, content).
-#' @param provider (character) One of "openai", "groq", or "anthropic".
-#' @param model (character) The model name. Defaults to a known model per provider.
-#' @param temperature (numeric) Sampling temperature (0 to ~2).
-#' @param max_tokens (integer) Maximum number of tokens to generate.
-#' @param api_key (character) An API key. If NULL, uses the environment variable.
-#' @param n_tries (integer) Number of attempts for retry on failure.
-#' @param backoff (numeric) Seconds to wait between retries.
-#' @param endpoint_url (character) Base URL for the provider. If NULL,
-#'   uses a default for the given provider.
-#' @param ... Additional parameters appended to the request body.
-#' @param .post_func (function) (Internal) Function to perform POST requests.
-#'   Defaults to \code{httr::POST}.
+#' @name list_models
 #'
-#' @return (character) The text completion from the chosen model.
+#' @description
+#' Retrieve the catalog of available model IDs for one or all supported
+#' chat - completion providers. Useful for discovering active models and
+#' avoiding typos or deprecated defaults.
+#'
+#' Supported providers:
+#' \itemize{
+#'   \item \code{"openai"}     -  OpenAI Chat Completions API
+#'   \item \code{"groq"}       -  Groq OpenAI - compatible endpoint
+#'   \item \code{"anthropic"}  -  Anthropic Claude API
+#'   \item \code{"deepseek"}   -  DeepSeek chat API
+#'   \item \code{"dashscope"}  -  Alibaba DashScope compatible API
+#'   \item \code{"github"}     -  GitHub Models OpenAI - compatible API
+#'   \item \code{"all"}        -  Fetch catalogs for all of the above
+#' }
+#'
+#' @param provider Character. One of \code{"github"}, \code{"openai"},
+#'   \code{"groq"}, \code{"anthropic"}, \code{"deepseek"},
+#'   \code{"dashscope"} or \code{"all"}. Case - insensitive.
+#' @param ... Additional arguments passed to the per - provider helper
+#'   (e.g. \code{limit} for Anthropic, or \code{api_version} for GitHub).
+#' @param github_api_version Character. Header value for
+#'   \code{X - GitHub - Api - Version} (GitHub Models). Default \code{"2022 - 11 - 28"}.
+#' @param anthropic_api_version Character. Header value for
+#'   \code{anthropic - version} (Anthropic). Default \code{"2023 - 06 - 01"}.
+#'
+#' @return
+#' If \code{provider != "all"}, a character vector of model IDs for that
+#' single provider. If \code{provider == "all"}, a named list of character
+#' vectors, one per provider.
+#'
 #' @examples
 #' \dontrun{
-#' response <- call_llm(
-#'   prompt = "Hello, how are you?",
-#'   provider = "openai",
-#'   max_tokens = 50,
-#'   n_tries = 3,
-#'   backoff = 2
-#' )
-#' cat(response)
+#' Sys.setenv(OPENAI_API_KEY = "sk-...")
+#' openai_models <- list_models("openai")
+#' head(openai_models)
 #'
-#' conv <- list(
-#'   list(role = "system", content = "You are a helpful assistant."),
-#'   list(role = "user",   content = "Explain recursion in R.")
-#' )
-#' response <- call_llm(
-#'   messages = conv,
-#'   provider = "openai",
-#'   max_tokens = 200,
-#'   presence_penalty = 0.2,
-#'   frequency_penalty = 0.1,
-#'   top_p = 0.95,
-#'   stop = c("###")
-#' )
-#' cat(response)
+#' Sys.setenv(ANTHROPIC_API_KEY = "sk-...")
+#' anthro_models <- list_models("anthropic", anthropic_api_version = "2023-06-01")
+#'
+#' Sys.setenv(GH_MODELS_TOKEN = "ghp-...")
+#' github_models <- list_models("github", github_api_version = "2022-11-28")
 #' }
+#'
+#' @seealso
+#'   \code{\link{call_llm}}
 #' @export
+NULL
+
+list_models <- function(provider = c("github","openai","groq",
+                                     "anthropic","deepseek","dashscope","all"),
+                        ...) {
+  provider <- match.arg(tolower(provider),
+                        c("github","openai","groq",
+                          "anthropic","deepseek","dashscope","all"))
+
+  fetch <- switch(
+    provider,
+    "openai"    = get_openai_models,
+    "groq"      = get_groq_models,
+    "anthropic" = get_anthropic_models,
+    "deepseek"  = get_deepseek_models,
+    "dashscope" = get_dashscope_models,
+    "github"    = function(...) get_all_github_models(...),
+    "all"       = NULL
+  )
+
+  if (!is.null(fetch)) {
+    mods <- tryCatch(fetch(...), error = function(e) character())
+    if (length(mods) == 0)
+      message(sprintf("No model catalog returned for '%s'.", provider))
+    return(mods)
+  }
+
+  provs <- c("openai","groq","anthropic","deepseek","dashscope","github")
+  setNames(lapply(provs, function(p) {
+    tryCatch(list_models(p, ...), error = function(e) character())
+  }), provs)
+}
+
+###############################################################################
+# 6. Core chat-completion wrapper                                             #
+###############################################################################
+#' Core chat - completion wrapper for multiple providers
+#'
+#' @title Unified chat - completion interface
+#' @name call_llm
+#' @description
+#' A unified wrapper for several "OpenAI - compatible" chat - completion APIs
+#' (OpenAI, Groq, Anthropic, DeepSeek, Alibaba DashScope, GitHub Models).
+#' Accepts either a single `prompt` **or** a full `messages` list, adds the
+#' correct authentication headers, retries on transient failures, and returns
+#' the assistant's text response. You can toggle informational console
+#' output with `verbose = TRUE/FALSE`. If the chosen `model` is no longer
+#' available, the function stops early and suggests running
+#' `list_models("<provider>")`.
+#'
+#' @section Messages:
+#' * `prompt`    -  character scalar treated as a single *user* message.
+#' * `messages`  -  list of lists; each element must contain `role` and `content`.
+#'                If both arguments are supplied, the `prompt` is appended
+#'                as an extra user message.
+#'
+#' @param prompt   Character. Single user prompt (optional if `messages`).
+#' @param messages List. Full chat history; see *Messages*.
+#' @param provider Character. One of `"openai"`, `"groq"`, `"anthropic"`,
+#'                 `"deepseek"`, `"dashscope"`, or `"github"`.
+#' @param model    Character. Model ID. If `NULL`, uses the provider default.
+#' @param temperature Numeric. Sampling temperature (0 - 2). Default `0.7`.
+#' @param max_tokens  Integer. Max tokens to generate. Default `1000`.
+#' @param api_key     Character. Override API key; if `NULL`, uses the
+#'                    environment variable for that provider.
+#' @param n_tries     Integer. Retry attempts on failure. Default `3`.
+#' @param backoff     Numeric. Seconds between retries. Default `2`.
+#' @param verbose     Logical. Whether to display informational messages
+#'                    (`TRUE`) or suppress them (`FALSE`). Default `TRUE`.
+#' @param endpoint_url Character. Custom endpoint; if `NULL`, a sensible
+#'                    provider - specific default is used.
+#' @param github_api_version Character. Header `X - GitHub - Api - Version`.
+#'                           Default `"2022 - 11 - 28"`.
+#' @param anthropic_api_version Character. Header `anthropic - version`.
+#'                             Default `"2023 - 06 - 01"`.
+#' @param ...         Extra JSON - body fields (e.g. `top_p`, `stop`,
+#'                    `presence_penalty`).
+#' @param .post_func  Internal. HTTP POST function (default `httr::POST`).
+#'
+#' @return Character scalar: assistant reply text.
+#'
+#' @examples
+#' \dontrun{
+#'
+#' ## 1. Listing available models
+#' # List all providers at once
+#' all_mods <- list_models("all")
+#' str(all_mods)
+#'
+#' # List OpenAI-only, Groq-only, Anthropic-only
+#' openai_mods   <- list_models("openai")
+#' groq_mods     <- list_models("groq")
+#' anthropic_mods<- list_models("anthropic", anthropic_api_version = "2023-06-01")
+#'
+#' ## 2. Single-prompt interface
+#'
+#' # 2a. Basic usage
+#' Sys.setenv(OPENAI_API_KEY = "sk-...")
+#' res_basic <- call_llm(
+#'   prompt   = "Hello, how are you?",
+#'   provider = "openai"
+#' )
+#' cat(res_basic)
+#'
+#' # 2b. Adjust sampling and penalties
+#' res_sampling <- call_llm(
+#'   prompt      = "Write a haiku about winter",
+#'   provider    = "openai",
+#'   temperature = 1.2,
+#'   top_p       = 0.5,
+#'   presence_penalty  = 0.6,
+#'   frequency_penalty = 0.4
+#' )
+#' cat(res_sampling)
+#'
+#' # 2c. Control length and retries
+#' res_len <- call_llm(
+#'   prompt      = "List 5 uses for R",
+#'   provider    = "openai",
+#'   max_tokens  = 50,
+#'   n_tries     = 5,
+#'   backoff     = 0.5
+#' )
+#' cat(res_len)
+#'
+#' # 2d. Using stop sequences
+#' res_stop <- call_llm(
+#'   prompt   = "Count from 1 to 10:",
+#'   provider = "openai",
+#'   stop     = c("6")
+#' )
+#' cat(res_stop)
+#'
+#' # 2e. Override API key for one call
+#' res_override <- call_llm(
+#'   prompt   = "Override test",
+#'   provider = "openai",
+#'   api_key  = "sk-override",
+#'   max_tokens = 20
+#' )
+#' cat(res_override)
+#'
+#' # 2f. Factory interface for repeated prompts
+#' GitHubLLM <- call_llm(
+#'   provider   = "github",
+#'   max_tokens = 60,
+#'   verbose    = FALSE
+#' )
+#' # direct invocation
+#' story1 <- GitHubLLM("Tell me a short story")
+#' cat(story1)
+#'
+#' ## 3. Multi-message conversation
+#'
+#' # 3a. Simple system + user
+#' convo1 <- list(
+#'   list(role = "system",    content = "You are a helpful assistant."),
+#'   list(role = "user",      content = "Explain recursion.")
+#' )
+#' res1 <- call_llm(
+#'   messages   = convo1,
+#'   provider   = "openai",
+#'   max_tokens = 100
+#' )
+#' cat(res1)
+#'
+#' # 3b. Continue an existing chat by appending a prompt
+#' prev <- list(
+#'   list(role = "system", content = "You are concise."),
+#'   list(role = "user",   content = "Summarize the plot of Hamlet.")
+#' )
+#' res2 <- call_llm(
+#'   messages = prev,
+#'   prompt   = "Now give me three bullet points."
+#' )
+#' cat(res2)
+#'
+#' # 3c. Use stop sequence in multi-message
+#' convo2 <- list(
+#'   list(role = "system", content = "You list items."),
+#'   list(role = "user",   content = "Name three colors.")
+#' )
+#' res3 <- call_llm(
+#'   messages = convo2,
+#'   stop     = c(".")
+#' )
+#' cat(res3)
+#'
+#' # 3d. Multi-message via factory interface
+#' ScopedLLM <- call_llm(provider = "openai", temperature = 0.3)
+#' chat_ctx <- list(
+#'   list(role = "system", content = "You are a math tutor.")
+#' )
+#' ans1 <- ScopedLLM(messages = chat_ctx, prompt = "Solve 2+2.")
+#' cat(ans1)
+#' ans2 <- ScopedLLM("What about 10*10?")
+#' cat(ans2)
+#' }
+#'
+#' @export
+NULL
+
 call_llm <- function(
     prompt        = NULL,
     messages      = NULL,
-    provider      = c("openai", "groq", "anthropic"),
+    provider      = c("openai","groq","anthropic",
+                      "deepseek","dashscope","github"),
     model         = NULL,
     temperature   = 0.7,
     max_tokens    = 1000,
     api_key       = NULL,
     n_tries       = 3,
     backoff       = 2,
+    verbose       = TRUE,
     endpoint_url  = NULL,
+    github_api_version     = "2022-11-28",
+    anthropic_api_version  = "2023-06-01",
     ...,
     .post_func    = httr::POST
 ) {
-  provider <- match.arg(tolower(provider), c("openai", "groq", "anthropic"))
 
-  # Default model if not specified
-  if (is.null(model)) {
-    model <- get_default_model(provider)
-  }
-
-  # Build final messages list
-  if (!is.null(messages)) {
-    if (!is.null(prompt)) {
-      messages <- c(messages, list(list(role = "user", content = prompt)))
+  ## ------------------------------------------------------------------------- ##
+  ## Factory mode: if neither prompt nor messages supplied, return an LLM object
+  if (missing(prompt) && missing(messages)) {
+      return(
+        function(prompt   = NULL,
+                 messages = NULL,
+                 ...) {
+          # Re - invoke call_llm() with stored defaults + whatever the user
+          # passes now
+          args_main <- list(prompt = prompt, messages = messages)
+          opts_main <- list(
+            provider              = provider,
+            model                 = model,
+            temperature           = temperature,
+            max_tokens            = max_tokens,
+            api_key               = api_key,
+            n_tries               = n_tries,
+            backoff               = backoff,
+            verbose               = verbose,
+            endpoint_url          = endpoint_url,
+            github_api_version    = github_api_version,
+            anthropic_api_version = anthropic_api_version,
+            .post_func            = .post_func
+          )
+          extra_args <- list(...)
+          all_args   <- c(args_main, opts_main, extra_args)
+          do.call(call_llm, all_args)
+        }
+      )
     }
+
+  ##
+  ## ------------------------------------------------------------------------- ##
+
+  provider <- match.arg(tolower(provider),
+                        c("openai","groq","anthropic",
+                          "deepseek","dashscope","github"))
+  if (is.null(model)) model <- get_default_model(provider)
+
+  ## ---------------- assemble messages ----------------------------------- ##
+  if (!is.null(messages)) {
+    if (!is.null(prompt))
+      messages <- c(messages, list(list(role = "user", content = prompt)))
   } else {
-    if (is.null(prompt)) stop("Must provide either `prompt` or `messages`.")
+    if (is.null(prompt))
+      stop("Provide either `prompt` or `messages`.")
     messages <- list(list(role = "user", content = prompt))
   }
 
-  # Fetch API key
+  ## ---------------- common request pieces ------------------------------- ##
   api_key <- get_api_key(provider, api_key)
 
-  # Base request body
-  req_body <- switch(
-    provider,
-    "openai" = list(
+  req_body <- c(
+    list(
       model       = model,
       messages    = messages,
       temperature = temperature,
       max_tokens  = max_tokens
     ),
-    "groq" = list(
-      model       = model,
-      messages    = messages,
-      temperature = temperature,
-      max_tokens  = max_tokens
-    ),
-    "anthropic" = list(
-      model       = model,
-      messages    = messages,
-      temperature = temperature,
-      max_tokens  = max_tokens
-    )
+    list(...)
   )
 
-  extra_args <- list(...)
-  if (length(extra_args) > 0) {
-    req_body <- c(req_body, extra_args)
-  }
-
-  # Set headers
   req_headers <- switch(
     provider,
-    "openai" = httr::add_headers(Authorization = paste("Bearer", api_key)),
-    "groq" = httr::add_headers(
-      Authorization = paste("Bearer", api_key),
-      "Content-Type" = "application/json"
-    ),
-    "anthropic" = httr::add_headers(
-      "x-api-key" = api_key,
-      "anthropic-version" = "2023-06-01",
-      "Content-Type" = "application/json"
-    )
+    "openai" = add_headers(Authorization = paste("Bearer", api_key)),
+    "groq"   = add_headers(Authorization = paste("Bearer", api_key),
+                           "Content-Type" = "application/json"),
+    "anthropic" = add_headers(`x-api-key` = api_key,
+                              `anthropic-version` = anthropic_api_version,
+                              "Content-Type" = "application/json"),
+    "deepseek"  = add_headers(Authorization = paste("Bearer", api_key)),
+    "dashscope" = add_headers(Authorization = paste("Bearer", api_key)),
+    "github"    = add_headers(Accept = "application/vnd.github+json",
+                              Authorization = paste("Bearer", api_key),
+                              `X-GitHub-Api-Version` = github_api_version,
+                              "Content-Type" = "application/json")
   )
 
   if (is.null(endpoint_url)) {
@@ -192,85 +494,133 @@ call_llm <- function(
       provider,
       "openai"    = "https://api.openai.com/v1/chat/completions",
       "groq"      = "https://api.groq.com/openai/v1/chat/completions",
-      "anthropic" = "https://api.anthropic.com/v1/messages"
+      "anthropic" = "https://api.anthropic.com/v1/messages",
+      "deepseek"  = "https://api.deepseek.com/v1/chat/completions",
+      "dashscope" = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions",
+      "github"    = {
+        org <- Sys.getenv("GH_MODELS_ORG")
+        if (nzchar(org))
+          sprintf("https://models.github.ai/orgs/%s/inference/chat/completions", org)
+        else
+          "https://models.github.ai/inference/chat/completions"
+      }
     )
   }
 
-  message(sprintf(
-    "Calling %s [%s] at %s with %d messages. Temp=%.1f, max_tokens=%d, attempts=%d",
-    provider, model, endpoint_url, length(messages), temperature, max_tokens, n_tries
-  ))
-
-  # Retry mechanism using .post_func
-  res <- NULL
-  for (i in seq_len(n_tries)) {
-    res <- tryCatch({
-      .post_func(url = endpoint_url, encode = "json", body = req_body, req_headers)
-    }, error = function(e) {
-      if (i == n_tries) {
-        stop(sprintf("Error calling %s on attempt %d: %s", provider, i, e$message))
-      } else {
-        message(sprintf(
-          "Attempt %d of %d failed for %s. Retrying in %d seconds...\n%s",
-          i, n_tries, provider, backoff, e$message
-        ))
-        Sys.sleep(backoff)
-        return(NULL)
-      }
-    })
-
-    if (is.null(res)) next
-
-    if (!httr::http_error(res)) {
-      break
-    } else {
-      if (i == n_tries) {
-        stop(sprintf("%s API error on attempt %d: %s",
-                     provider, i, httr::content(res, "text")))
-      } else {
-        message(sprintf(
-          "HTTP error on attempt %d of %d for %s. Retrying in %d seconds...",
-          i, n_tries, provider, backoff
-        ))
-        Sys.sleep(backoff)
-      }
-    }
+  if (verbose) {
+    message(sprintf("Calling %s [%s] ... attempts=%d", provider, model, n_tries))
   }
 
-  parsed_content <- httr::content(res, "parsed")
-  response_text <- parse_response(provider, parsed_content)
-  snippet <- substr(response_text, 1, min(200, nchar(response_text)))
-  message(sprintf("Response from %s (truncated):\n%s", provider, snippet))
-  return(response_text)
+  ## ---------------- retry loop ------------------------------------------ ##
+  res <- NULL
+  for (i in seq_len(n_tries)) {
+
+    res <- tryCatch(
+      .post_func(
+        url    = endpoint_url,
+        encode = "json",
+        body   = req_body,
+        req_headers
+      ),
+      error = function(e) {
+        # detect network time-outs explicitly
+        if (grepl("timeout", e$message, ignore.case = TRUE)) {
+          msg <- sprintf("Attempt %d/%d failed (%s: timeout). Retrying in %ds...",
+                         i, n_tries, provider, backoff)
+        } else {
+          msg <- sprintf("Attempt %d/%d failed (%s). Retrying in %ds...",
+                         i, n_tries, provider, backoff)
+        }
+        message(msg)
+
+        if (i == n_tries) {
+          stop(sprintf(
+            paste0(
+              'The request to provider "%s" timed out after %d attempt(s).\n\n',
+              'Tip: the model may be retired or misspelled.\n',
+              'Run list_models("%s") (after setting the proper *_API_KEY / ',
+              'MODELS_TOKEN) to see current models, e.g.\n',
+              '    openai_models <- list_models("openai")\n',
+              'Then rerun call_llm(..., model = "<new-model>").\n\n',
+              'If the issue is network-related you can also:\n',
+              ' . increase `n_tries` or `backoff`,\n',
+              ' . provide a longer `timeout()` via `.post_func`, or\n',
+              ' . check your network / VPN.\n\n',
+              'Internal message: %s'
+            ),
+            provider, n_tries, provider, e$message
+          ), call. = FALSE)
+        }
+
+        Sys.sleep(backoff)
+        NULL
+      }
+    )
+
+    if (is.null(res)) next          # go to next iteration
+    if (!http_error(res)) break     # success, exit loop
+
+    ## ---- HTTP error branch --------------------------------------------- ##
+    err_txt    <- content(res, "text", encoding = "UTF-8")
+    err_parsed <- tryCatch(fromJSON(err_txt), error = function(e) NULL)
+
+    not_found <- FALSE
+    if (!is.null(err_parsed$error$code))
+      not_found <- grepl("model_not_found|invalid_model|404",
+                         err_parsed$error$code, ignore.case = TRUE)
+    if (!not_found && !is.null(err_parsed$message))
+      not_found <- grepl("model.*not.*found|no such model|de.?commiss|deprecated",
+                         err_parsed$message, ignore.case = TRUE)
+
+    if (not_found) {
+      stop(sprintf(
+        paste0(
+          'The model "%s" is unavailable or de-commissioned for provider "%s".\n',
+          'Tip: run list_models("%s") after setting the proper *_API_KEY / ',
+          'MODELS_TOKEN to see current models, e.g.\n',
+          '    openai_models <- list_models("openai")\n',
+          'Then rerun call_llm(..., model = "<new-model>").'
+        ),
+        model, provider, provider
+      ), call. = FALSE)
+    }
+
+    ## --- generic HTTP error after final retry --------------------------- ##
+    if (i == n_tries) {
+      stop(sprintf(
+        paste0(
+          'Provider "%s" still returned an error after %d attempt(s).\n\n',
+          'Raw response from server:\n%s\n\n',
+          'Tip: the model may be retired, renamed, or misspelled.\n',
+          '. Run list_models("%s") (after setting the proper *_API_KEY / ',
+          'MODELS_TOKEN) to view currently available models, e.g.\n',
+          '    openai_models <- list_models("openai")\n',
+          '. Or visit the provider\'s dashboard / documentation for the ',
+          'latest list.\n\n',
+          'Then rerun call_llm(..., model = "<new-model>").'
+        ),
+        provider, n_tries, err_txt, provider
+      ), call. = FALSE)
+    }
+
+    if (verbose) {
+      message(sprintf("HTTP %d on attempt %d/%d. Retrying in %ds...",
+                      status_code(res), i, n_tries, backoff))
+    }
+
+    Sys.sleep(backoff)
+  }
+
+
+  txt <- parse_response(provider, content(res, "parsed"))
+
+  if (verbose) {
+    message(sprintf("Response (truncated):\n%s",
+                    substr(txt, 1, min(200, nchar(txt)))))
+  }
+  txt
 }
 
-
-# ------------------------------------------------------------------------------
-# Example usage (uncomment & ensure environment variables are set properly)
-# ------------------------------------------------------------------------------
-# # Single prompt, no fancy parameters
-# Sys.setenv(OPENAI_API_KEY = "sk-xxxx")
-# response <- call_llm(
-#   prompt = "Hello, how are you?",
-#   provider = "openai",
-#   max_tokens = 50,
-#   n_tries = 3,
-#   backoff = 2
-# )
-# cat(response)
-#
-# # Multi-message conversation plus advanced parameters
-# conv <- list(
-#   list(role = "system", httr::content = "You are a helpful assistant."),
-#   list(role = "user",   httr::content = "Explain recursion in R.")
-# )
-# response <- call_llm(
-#   messages    = conv,
-#   provider    = "openai",
-#   max_tokens  = 200,
-#   presence_penalty  = 0.2,
-#   frequency_penalty = 0.1,
-#   top_p       = 0.95,
-#   stop        = c("###")
-# )
-# cat(response)
+###############################################################################
+# End of block                                                                #
+###############################################################################

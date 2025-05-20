@@ -1,167 +1,186 @@
 
 <!-- README.md is generated from README.Rmd. Please edit that file -->
 
-# chatLLM <a href="https://knowusuboaky.github.io/chatLLM"><img src="man/figures/openlogo.png" align="right" height="120" /></a>
+# chatLLM <a href="https://knowusuboaky.github.io/chatLLM/"><img src="man/figures/openlogo.png" align="right" height="120" /></a>
 
 <!-- badges: start -->
 
 [![CRAN
 status](https://www.r-pkg.org/badges/version/chatLLM)](https://cran.r-project.org/package=chatLLM)
-[![Codecov test
-coverage](https://codecov.io/gh/knowusuboaky/chatLLM/branch/main/graph/badge.svg)](https://app.codecov.io/gh/knowusuboaky/chatLLM?branch=main)
+[![Codecov](https://codecov.io/gh/knowusuboaky/chatLLM/branch/main/graph/badge.svg)](https://app.codecov.io/gh/knowusuboaky/chatLLM?branch=main)
 [![Last
 Commit](https://img.shields.io/github/last-commit/knowusuboaky/chatLLM.svg)](https://github.com/knowusuboaky/chatLLM/commits/main)
 [![Issues](https://img.shields.io/github/issues/knowusuboaky/chatLLM.svg)](https://github.com/knowusuboaky/chatLLM/issues)
-[![Total
-Downloads](https://cranlogs.r-pkg.org/badges/grand-total/chatLLM?color=orange)](https://cranlogs.r-pkg.org/badges/grand-total/chatLLM)
+[![Downloads](https://cranlogs.r-pkg.org/badges/grand-total/chatLLM?color=orange)](https://cranlogs.r-pkg.org/badges/grand-total/chatLLM)
+
 <!-- badges: end -->
 
 ## Overview
 
-**chatLLM** is an R package that provides a unified and flexible
-interface for interacting with popular Large Language Model (LLM)
-providers such as **OpenAI**, **Groq**, and **Anthropic**.
+**chatLLM** is an R package providing a single, consistent interface to
+multiple “OpenAI‑compatible” chat APIs (OpenAI, Groq, Anthropic,
+DeepSeek, Alibaba DashScope, and GitHub Models).
 
-Features include:
+Key features:
 
-- 🔁 Seamless provider switching
-- 🗣 Multi-message conversations
-- 🔄 Retries + backoff
-- 🔌 Extendable parameters
-- 🛠 Test using `.post_func`
+- 🔄 **Uniform API** across providers
+- 🗣 **Multi‑message context** (system/user/assistant roles)
+- 🔁 **Retries & backoff** with clear timeout handling
+- 🔈 **Verbose control** (`verbose = TRUE/FALSE`)
+- ⚙️ **Discover models** via `list_models()`
+- 🏗 **Factory interface** for repeated calls
+- 🌐 **Custom endpoint** override and advanced tuning
 
 ------------------------------------------------------------------------
 
 ## Installation
 
+From CRAN:
+
 ``` r
 install.packages("chatLLM")
 ```
 
-------------------------------------------------------------------------
-
-## Development version
-
-To get the latest features or bug fixes, you can install the development
-version of `chatLLM` from GitHub:
+Development version:
 
 ``` r
-# If needed
-install.packages("remotes")
-
+# install.packages("remotes")  # if needed
 remotes::install_github("knowusuboaky/chatLLM")
 ```
 
-See the full [function
-reference](https://knowusuboaky.github.io/chatLLM/reference) or the
-[package website](https://knowusuboaky.github.io/chatLLM/) for more
-details.
-
 ------------------------------------------------------------------------
 
-## Environment Setup
+## Setup
+
+Set your API keys or tokens once per session:
 
 ``` r
-Sys.setenv(OPENAI_API_KEY    = "your-openai-api-key")
-Sys.setenv(GROQ_API_KEY      = "your-groq-api-key")
-Sys.setenv(ANTHROPIC_API_KEY = "your-anthropic-api-key")
+Sys.setenv(
+  OPENAI_API_KEY     = "your-openai-key",
+  GROQ_API_KEY       = "your-groq-key",
+  ANTHROPIC_API_KEY  = "your-anthropic-key",
+  DEEPSEEK_API_KEY   = "your-deepseek-key",
+  DASHSCOPE_API_KEY  = "your-dashscope-key",
+  GH_MODELS_TOKEN    = "your-github-models-token"
+)
 ```
 
 ------------------------------------------------------------------------
 
 ## Usage
 
-### 1. Simple Prompt Call
+### 1. Simple Prompt
 
 ``` r
 response <- call_llm(
-  prompt = "Who is messi?",
-  provider = "openai",
-  max_tokens = 500,
-  n_tries = 3,
-  backoff = 2
+  prompt     = "Who is Messi?",
+  provider   = "openai",
+  max_tokens = 300
 )
-```
-
-``` r
-response
-#> [1] "Lionel Messi is an Argentine professional footballer who plays as a forward for Paris Saint-Germain and the Argentina national team.
-#> He is widely considered one of the greatest footballers of all time, having won numerous awards and accolades throughout his career.
-#> Messi is known for his incredible dribbling skills, vision, and goal-scoring ability."
-
 cat(response)
-#> Lionel Messi is an Argentine professional footballer who plays as a forward for Paris Saint-Germain and the Argentina national team.
-#> He is widely considered one of the greatest footballers of all time, having won numerous awards and accolades throughout his career.
-#> Messi is known for his incredible dribbling skills, vision, and goal-scoring ability.
 ```
 
-------------------------------------------------------------------------
-
-### 2. Multi-Message Conversation
+### 2. Multi‑Message Conversation
 
 ``` r
 conv <- list(
-  list(role = "system", content = "You are a helpful assistant."),
-  list(role = "user", content = "Explain recursion in R.")
+  list(role    = "system",    content = "You are a helpful assistant."),
+  list(role    = "user",      content = "Explain recursion in R.")
 )
 response <- call_llm(
-  messages = conv,
-  provider = "openai",
-  max_tokens = 200,
-  presence_penalty = 0.2,
+  messages          = conv,
+  provider          = "openai",
+  max_tokens        = 200,
+  presence_penalty  = 0.2,
   frequency_penalty = 0.1,
-  top_p = 0.95
+  top_p             = 0.95
 )
+cat(response)
 ```
 
-``` r
-response
-#> [1] "Recursion is a programming technique where a function calls itself in order to solve a problem.
-#> In R, a recursive function is defined similarly to any other function, but within the function body, there is a call to the same function.
-#> This continues until a base case is reached, at which point the recursion unwinds and results are returned.
-#>
-#> Here is an example of a recursive factorial function in R:
-#>
-#> factorial_recursive <- function(n) {
-#>   if (n == 0) return(1)
-#>   n * factorial_recursive(n - 1)
-#> }
-#>
-#> factorial_recursive(5)  # 120"
+### 3. Verbose Off
 
-cat(response)
-#> Recursion is a programming technique where a function calls itself in order to solve a problem.
-#> In R, a recursive function is defined similarly to any other function, but within the function body, there is a call to the same function.
-#> This continues until a base case is reached, at which point the recursion unwinds and results are returned.
-#>
-#> Here is an example of a recursive factorial function in R:
-#>
-#> factorial_recursive <- function(n) {
-#>   if (n == 0) return(1)
-#>   n * factorial_recursive(n - 1)
-#> }
-#>
-#> factorial_recursive(5)  # 120
+Suppress informational messages:
+
+``` r
+res <- call_llm(
+  prompt      = "Tell me a joke",
+  provider    = "openai",
+  verbose     = FALSE
+)
+cat(res)
+```
+
+### 4. Factory Interface
+
+Create a reusable LLM function:
+
+``` r
+# Build a “GitHub Models” engine with defaults baked in
+GitHubLLM <- call_llm(
+  provider    = "github",
+  max_tokens  = 60,
+  verbose     = FALSE
+)
+
+# Invoke it like a function:
+story <- GitHubLLM("Tell me a short story about libraries.")
+cat(story)
+```
+
+### 5. Discover Available Models
+
+``` r
+# All providers at once
+all_models <- list_models("all")
+names(all_models)
+
+# Only OpenAI models
+openai_models <- list_models("openai")
+head(openai_models)
+```
+
+### 6. Call a Specific Model
+
+Pick from the list and pass it to `call_llm()`:
+
+``` r
+anthro_models <- list_models("anthropic")
+cat(call_llm(
+  prompt     = "Write a haiku about autumn.",
+  provider   = "anthropic",
+  model      = anthro_models[1],
+  max_tokens = 60
+))
 ```
 
 ------------------------------------------------------------------------
 
-## Issues
+## Troubleshooting
 
-Please open an issue on
-[GitHub](https://github.com/knowusuboaky/chatLLM/issues) if you run into
-bugs or have feature requests.
+- **Timeouts**: increase `n_tries` / `backoff` or supply a custom
+  `.post_func` with higher `timeout()`.
+- **Model Not Found**: use `list_models("<provider>")` or consult
+  provider docs.
+- **Auth Errors**: verify your API key/token and environment variables.
+- **Network Issues**: check VPN/proxy, firewall, or SSL certs.
+
+------------------------------------------------------------------------
+
+## Contributing & Support
+
+Issues and PRs welcome at <https://github.com/knowusuboaky/chatLLM>
 
 ------------------------------------------------------------------------
 
 ## License
 
-MIT © [Kwadwo Daddy Nyame Owusu
+MIT © [Kwadwo Daddy Nyame Owusu -
 Boakye](mailto:kwadwo.owusuboakye@outlook.com)
 
 ------------------------------------------------------------------------
 
 ## Acknowledgements
 
-Inspired by projects like **RAGFlowChainR** and powered by the R
-open-source community. Enjoy chatting with your LLMs!
+Inspired by **RAGFlowChainR**, powered by **httr** and the R community.
+Enjoy!
