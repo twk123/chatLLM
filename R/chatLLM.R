@@ -52,52 +52,118 @@ get_api_key <- function(provider, api_key = NULL) {
 }
 
 ###############################################################################
-# 3. Parse chat-completion responses                                          #
+# 3. Extract from Ollama response - helper function                           #
+###############################################################################
+extract_ollama_content <- function(text_content) {
+  # 1. Try parsing as single complete JSON
+  full_json <- tryCatch(
+    fromJSON(text_content),
+    error = function(e) NULL
+  )
+  
+  if (!is.null(full_json)) {
+    # Check for different response formats
+    if (!is.null(full_json$message) && !is.null(full_json$message$content)) {
+      return(full_json$message$content)
+    } else if (!is.null(full_json$response)) {
+      return(full_json$response)
+    } else if (!is.null(full_json$content)) {
+      return(full_json$content)
+    }
+  }
+  
+  # 2. Try parsing as NDJSON (multiple JSON objects separated by newlines)
+  lines <- strsplit(text_content, "\n")[[1]]
+  valid_lines <- lines[nzchar(lines)]
+  
+  if (length(valid_lines) > 0) {
+    last_line <- valid_lines[length(valid_lines)]
+    last_json <- tryCatch(
+      fromJSON(last_line),
+      error = function(e) NULL
+    )
+    
+    if (!is.null(last_json)) {
+      if (!is.null(last_json$message) && !is.null(last_json$message$content)) {
+        return(last_json$message$content)
+      } else if (!is.null(last_json$response)) {
+        return(last_json$response)
+      } else if (!is.null(last_json$content)) {
+        return(last_json$content)
+      }
+    }
+  }
+  
+  # 3. Try manual extraction using substring operations (to avoid regex issues)
+  # Look for content field
+  content_start_pos <- regexpr('"content"\\s*:\\s*"', text_content)
+  if (content_start_pos > 0) {
+    # Find position after the opening quote
+    content_text_start <- content_start_pos + 
+      attr(regexpr('"content"\\s*:\\s*"', text_content), "match.length")
+    
+    # Find the closing quote
+    rest_of_text <- substr(text_content, content_text_start, nchar(text_content))
+    # Find next quote that's not escaped
+    quote_pos <- regexpr('[^\\\\]"', rest_of_text)
+    
+    if (quote_pos > 0) {
+      content_text_end <- content_text_start + quote_pos
+      content_value <- substr(text_content, content_text_start, content_text_end - 1)
+      return(content_value)
+    }
+  }
+  
+  # 4. Look for response field using the same approach
+  response_start_pos <- regexpr('"response"\\s*:\\s*"', text_content)
+  if (response_start_pos > 0) {
+    response_text_start <- response_start_pos + 
+      attr(regexpr('"response"\\s*:\\s*"', text_content), "match.length")
+    
+    rest_of_text <- substr(text_content, response_text_start, nchar(text_content))
+    quote_pos <- regexpr('[^\\\\]"', rest_of_text)
+    
+    if (quote_pos > 0) {
+      response_text_end <- response_text_start + quote_pos
+      response_value <- substr(text_content, response_text_start, response_text_end - 1)
+      return(response_value)
+    }
+  }
+  
+  # 5. If we can't extract structured content, check if it's a plain text response
+  if (nzchar(text_content) && !grepl("^\\s*[\\{\\[]", text_content)) {
+    return(text_content)
+  }
+  
+  # If we get here, return NULL to indicate extraction failed
+  NULL
+}
+
+###############################################################################
+# 4. Parse chat-completion responses                                          #
 ###############################################################################
 parse_response <- function(provider, parsed, raw_content = NULL) {
   if (tolower(provider) == "ollama" && !is.null(raw_content)) {
-    # Special handling for Ollama NDJSON responses
-    # Try to parse the raw content directly
-    tryCatch({
-      # Get text content
-      text_content <- content(raw_content, "text", encoding = "UTF-8")
-      
-      # For NDJSON format, we need to parse each line separately
-      # Usually the last line contains the final message
-      lines <- strsplit(text_content, "\n")[[1]]
-      valid_lines <- lines[nzchar(lines)]
-      
-      if (length(valid_lines) > 0) {
-        # Try to parse the last complete line
-        last_json <- fromJSON(valid_lines[length(valid_lines)])
-        if (!is.null(last_json$message$content)) {
-          return(last_json$message$content)
-        }
-      }
-      
-      # If we couldn't parse it properly, extract content with regex as fallback
-      content_matches <- gregexpr('"content":"([^"]*)"', text_content)
-      if (length(content_matches) > 0 && content_matches[[1]][1] > 0) {
-        content_strs <- regmatches(text_content, content_matches)[[1]]
-        if (length(content_strs) > 0) {
-          # Get the last content string (most likely to be the final response)
-          content_str <- content_strs[length(content_strs)]
-          # Extract the actual content part
-          content_only <- gsub('^"content":")|"$', '', content_str)
-          return(content_only)
-        }
-      }
-      
-      # Last resort - return the raw text if everything else fails
-      return(paste("Raw response:", text_content))
-      
-    }, error = function(e) {
-      # If all parsing attempts fail, try the standard method
-      if (!is.null(parsed$message$content)) {
-        return(parsed$message$content)
-      }
-      return(paste("Failed to parse Ollama response:", e$message))
-    })
+    # Special handling for Ollama responses
+    raw_text <- content(raw_content, "text", encoding = "UTF-8")
+    
+    # Use the helper function to extract content
+    result <- extract_ollama_content(raw_text)
+    
+    # If extraction succeeded, return it
+    if (!is.null(result)) {
+      return(result)
+    }
+    
+    # If extraction failed, try standard parsing methods
+    if (!is.null(parsed$message$content)) {
+      return(parsed$message$content)
+    } else if (!is.null(parsed$response)) {
+      return(parsed$response)
+    }
+    
+    # Last resort: return a message indicating failure
+    return("Failed to extract content from Ollama response")
   } else {
     # Standard parsing for other providers
     switch(
@@ -112,7 +178,6 @@ parse_response <- function(provider, parsed, raw_content = NULL) {
         if (!is.null(parsed$message$content)) {
           parsed$message$content
         } else if (!is.null(parsed$response)) {
-          # Some Ollama versions use different response format
           parsed$response
         } else {
           stop("Could not parse Ollama response format")
@@ -124,7 +189,7 @@ parse_response <- function(provider, parsed, raw_content = NULL) {
 }
 
 ###############################################################################
-# 4. Model-catalog helpers (one per provider)                                 #
+# 5. Model-catalog helpers (one per provider)                                 #
 ###############################################################################
 get_openai_models <- function(token = Sys.getenv("OPENAI_API_KEY")) {
   if (!nzchar(token)) return(character())
@@ -307,7 +372,7 @@ get_ollama_models <- function(base_url = Sys.getenv("OLLAMA_BASE_URL", "http://l
 }
 
 ###############################################################################
-# 5. list_models()                                                            #
+# 6. list_models()                                                            #
 ###############################################################################
 #' List Available Models for Supported Providers
 #'
@@ -399,7 +464,7 @@ list_models <- function(provider = c("github","openai","groq",
 }
 
 ###############################################################################
-# 6. Core chat-completion wrapper                                             #
+# 7. Core chat-completion wrapper                                             #
 ###############################################################################
 #' Core chat - completion wrapper for multiple providers
 #'
@@ -624,6 +689,7 @@ call_llm <- function(
     req_body <- list(
       model = model,
       messages = messages,
+      stream = FALSE,  # Explicitly disable streaming for more consistent responses
       options = list(
         temperature = temperature,
         num_predict = max_tokens
@@ -634,8 +700,10 @@ call_llm <- function(
     extra_args <- list(...)
     if (length(extra_args) > 0) {
       for (arg in names(extra_args)) {
-        # Only add compatible parameters
-        if (!arg %in% c("model", "messages", "options")) {
+        # Only add compatible parameters to the appropriate place
+        if (arg == "stream") {
+          req_body$stream <- extra_args[[arg]]
+        } else if (!arg %in% c("model", "messages", "options")) {
           req_body$options[[arg]] <- extra_args[[arg]]
         }
       }
@@ -773,15 +841,15 @@ call_llm <- function(
     err_parsed <- tryCatch(fromJSON(err_txt), error = function(e) NULL)
 
     not_found <- FALSE
-    if (!is.null(err_parsed$error$code))
+    if (!is.null(err_parsed) && !is.null(err_parsed$error) && !is.null(err_parsed$error$code))
       not_found <- grepl("model_not_found|invalid_model|404",
                          err_parsed$error$code, ignore.case = TRUE)
-    if (!not_found && !is.null(err_parsed$message))
+    if (!not_found && !is.null(err_parsed) && !is.null(err_parsed$message))
       not_found <- grepl("model.*not.*found|no such model|de.?commiss|deprecated",
                          err_parsed$message, ignore.case = TRUE)
     
     # Special handling for Ollama error formats
-    if (provider == "ollama" && !is.null(err_parsed$error)) {
+    if (provider == "ollama" && !is.null(err_parsed) && !is.null(err_parsed$error)) {
       if (grepl("model.*not.*found|no such model", err_parsed$error, ignore.case = TRUE)) {
         not_found <- TRUE
       }
@@ -854,16 +922,17 @@ call_llm <- function(
     Sys.sleep(backoff)
   }
 
+  # Process the successful response
   txt <- if (provider == "ollama") {
-    # Pass the raw response for Ollama to handle NDJSON format
+    # Pass the raw response for Ollama to handle various formats
     parse_response(provider, content(res, "parsed", "application/json"), res)
   } else {
     parse_response(provider, content(res, "parsed"))
   }
 
   if (verbose) {
-    message(sprintf("Response (truncated):\n%s",
-                    substr(txt, 1, min(200, nchar(txt)))))
+    trunc_txt <- if (nchar(txt) > 200) paste0(substr(txt, 1, 200), "...") else txt
+    message(sprintf("Response (truncated):\n%s", trunc_txt))
   }
   txt
 }
