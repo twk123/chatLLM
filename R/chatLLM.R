@@ -104,135 +104,69 @@ get_ollama_models <- function(base_url = Sys.getenv("OLLAMA_BASE_URL", "http://l
   }
 
   # Try multiple endpoints in sequence
-  endpoints <- list(
-    list(path = "/api/tags", parser = function(r) {
-      parsed <- fromJSON(content(r, "text", encoding = "UTF-8"))
+  # First try /api/tags (newer Ollama versions)
+  r_tags <- tryCatch(
+    GET(paste0(base_url, "/api/tags"), timeout(10)),
+    error = function(e) NULL
+  )
+
+  if (!is.null(r_tags) && !http_error(r_tags)) {
+    models <- tryCatch({
+      parsed <- content(r_tags, "parsed")
+
       if (is.list(parsed) && "models" %in% names(parsed)) {
-        return(vapply(parsed$models, function(x) x$name, character(1)))
-      } else if (is.list(parsed) && !is.null(parsed$models)) {
-        return(unlist(parsed$models))
-      } else if (is.list(parsed) && length(parsed) > 0) {
-        result <- character()
-        for (i in seq_along(parsed)) {
-          if (is.list(parsed[[i]]) && "name" %in% names(parsed[[i]])) {
-            result <- c(result, parsed[[i]]$name)
-          } else if (is.character(parsed[[i]])) {
-            result <- c(result, parsed[[i]])
-          }
-        }
-        return(result)
-      }
-      character()
-    }),
-    list(path = "/api/models", parser = function(r) {
-      parsed <- fromJSON(content(r, "text", encoding = "UTF-8"))
-      if (is.list(parsed) && "models" %in% names(parsed)) {
-        return(vapply(parsed$models, function(x) {
+        # Extract models from the "models" field
+        result <- vapply(parsed$models, function(x) {
           if (is.list(x) && "name" %in% names(x)) return(x$name)
           if (is.character(x)) return(x)
           NA_character_
-        }, character(1)))
+        }, character(1))
+        return(result[!is.na(result)])
       }
+
       character()
-    }),
-    list(path = "/api/model", parser = function(r) {
-      models <- character()
+    }, error = function(e) character())
 
-      # For older Ollama versions, we may need to make a separate request to get models
-      # This is a fallback but not optimal as it might be slow
-      cmd_resp <- POST(
-        url = paste0(base_url, "/api/generate"),
-        body = list(
-          model = "unknown",
-          prompt = "List all available models"
-        ),
-        encode = "json"
-      )
+    if (length(models) > 0) {
+      return(unique(models))
+    }
+  }
 
-      if (!http_error(cmd_resp)) {
-        err_txt <- content(cmd_resp, "text", encoding = "UTF-8")
-        # Extract model names from error message
-        matches <- gregexpr("'([^']+)'", err_txt)
-        if (matches[[1]][1] > 0) {
-          model_matches <- regmatches(err_txt, matches)[[1]]
-          models <- gsub("'", "", model_matches)
-          # Filter out likely non-models
-          models <- models[!grepl("unknown|error|not found", models, ignore.case = TRUE)]
-        }
-      }
-
-      models
-    }),
-    # Try local Ollama CLI as a last resort
-    list(path = "local_cli", parser = function(r) {
-      # This tries to execute the Ollama CLI command if all else fails
-      if (.Platform$OS.type == "unix") {
-        cli_output <- tryCatch({
-          system("ollama list", intern = TRUE)
-        }, error = function(e) character())
-
-        if (length(cli_output) > 0) {
-          # Parse the CLI output - usually in the format "NAME ID"
-          models <- character()
-          for (line in cli_output) {
-            if (grepl("^[a-zA-Z0-9_\\-]+", line)) {
-              model_name <- strsplit(line, "\\s+")[[1]][1]
-              if (!is.na(model_name) && nzchar(model_name)) {
-                models <- c(models, model_name)
-              }
-            }
-          }
-          return(models)
-        }
-      }
-      character()
-    })
+  # If /api/tags fails, try /api/models
+  r_models <- tryCatch(
+    GET(paste0(base_url, "/api/models"), timeout(10)),
+    error = function(e) NULL
   )
 
-  # Try each endpoint until we get results
-  for (endpoint in endpoints) {
-    if (endpoint$path == "local_cli") {
-      # Special case for local CLI
-      models <- endpoint$parser(NULL)
-      if (length(models) > 0) {
-        message("Retrieved models from local Ollama CLI")
-        return(models)
+  if (!is.null(r_models) && !http_error(r_models)) {
+    models <- tryCatch({
+      parsed <- content(r_models, "parsed")
+
+      if (is.list(parsed) && "models" %in% names(parsed)) {
+        # Extract models from the "models" field
+        result <- vapply(parsed$models, function(x) {
+          if (is.list(x) && "name" %in% names(x)) return(x$name)
+          if (is.character(x)) return(x)
+          NA_character_
+        }, character(1))
+        return(result[!is.na(result)])
       }
-      next
-    }
 
-    r <- tryCatch({
-      GET(paste0(base_url, endpoint$path), timeout(10))
-    }, error = function(e) NULL)
+      character()
+    }, error = function(e) character())
 
-    if (is.null(r)) next
-
-    # Success or partial success
-    if (!http_error(r)) {
-      models <- tryCatch({
-        endpoint$parser(r)
-      }, error = function(e) {
-        message(sprintf("Failed to parse response from %s: %s",
-                      paste0(base_url, endpoint$path), e$message))
-        character()
-      })
-
-      if (length(models) > 0) {
-        # Strip any version tags from model names if present
-        models <- gsub(":.*$", "", models)
-        # Remove duplicates
-        return(unique(models[!is.na(models)]))
-      }
+    if (length(models) > 0) {
+      return(unique(models))
     }
   }
 
   # If we've tried all endpoints and still have no models
-                                message("Could not retrieve model list from Ollama server. Please check that:")
-                                message(" 1. Ollama is running and accessible at ", base_url)
-                                message(" 2. You have models installed (run 'ollama pull <model>' to install)")
-                                message(" 3. Your Ollama version is up to date")
+                             message("Could not retrieve model list from Ollama server. Please check that:")
+                             message(" 1. Ollama is running and accessible at ", base_url)
+                             message(" 2. You have models installed (run 'ollama pull <model>' to install)")
+                             message(" 3. Your Ollama version is up to date")
 
-                                character()
+                             character()
       }
 
       ###############################################################################
@@ -597,7 +531,7 @@ get_ollama_models <- function(base_url = Sys.getenv("OLLAMA_BASE_URL", "http://l
         txt
       }
       , '', content_str)
-    return(content_only)
+        return(content_only)
     }
 
     # Last resort - return the raw text if everything else fails
